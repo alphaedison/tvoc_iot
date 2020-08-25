@@ -1,0 +1,3 @@
+import scratch
+
+scratch.main()

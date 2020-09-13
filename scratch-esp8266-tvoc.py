@@ -1,13 +1,13 @@
 import time
 import network
 import machine
+import uos
 import json
 from simple import MQTTClient
 
 
-#uart setup
-voc = machine.UART(2, baudrate=9600)
-pm = machine.UART(1, baudrate=9600,tx=23,rx=22)
+#uart0 setup
+u0 = machine.UART(0, baudrate=9600)
 
 #instruction setup
 read_instruct=[0xff,0x01,0x87,0x00,0x00,0x00,0x00,0x00,0x78]
@@ -15,18 +15,11 @@ light_on=[0xff,0x01,0x89,0x00,0x00,0x00,0x00,0x00,0x76]
 light_off=[0xff,0x01,0x88,0x00,0x00,0x00,0x00,0x00,0x77]
 sleep=[0xaf,0x53,0x6c,0x65,0x65,0x70]
 wakeup=[0xae,0x45,0x78,0x69,0x74]
-read_instruct_voc=bytearray(read_instruct)
-light_on_voc=bytearray(light_on)
-light_off_voc=bytearray(light_off)
-sleep_voc=bytearray(sleep)
-wakeup_voc=bytearray(wakeup)
-
-sleep_pm=[0x42,0x4d,0xe4,0x00,0x00,0x01,0x73]
-wakeup_pm=[0x42,0x4d,0xe4,0x00,0x01,0x01,0x74]
-
-sleep_pm=bytearray(sleep_pm)
-wakeup_pm=bytearray(wakeup_pm)
-
+read_instruct=bytearray(read_instruct)
+light_on=bytearray(light_on)
+light_off=bytearray(light_off)
+sleep=bytearray(sleep)
+wakeup=bytearray(wakeup)
 
 #ali iot connection setup
 client_ID='c1h2m3e4g5o6o7'
@@ -60,26 +53,15 @@ def net_connecting(ssid,passwd):
 
     if not sta.isconnected():
         for i in range(5):
-            time.sleep(6)
+            time.sleep(5)
             sta.connect(ssid, passwd)
 
-    if not sta.isconnected():
-        machine.reset()
-
 #read tvoc data
-def instruction_voc(instruct):
-    voc.write(instruct)
+def instruction(instruct):
+    u0.write(instruct)
     data=bytearray(13)
     time.sleep(1)
-    voc.readinto(data)
-    return data
-
-#read pm2.5 data
-def instruction_pm(instruct):
-    pm.write(instruct)
-    data=bytearray(32)
-    time.sleep(1)
-    pm.readinto(data)
+    u0.readinto(data)
     return data
 
 #mqtt.subscribe的callback设置
@@ -89,27 +71,21 @@ def callback(topic,msg):
          msg = json.loads(msg.decode('utf-8'))
 
          if msg['message'] == 'success':
-            instruction_voc(light_off_voc)
-            instruction_voc(sleep_voc)
-            instruction_pm(sleep_pm)
-            machine.deepsleep(180000)
+            instruction(light_off)
+            rtc = machine.RTC()
+            rtc.irq(trigger=rtc.ALARM0, wake=machine.DEEPSLEEP)
+            rtc.alarm(rtc.ALARM0, 300000)
+            machine.deepsleep()
 
 #read tvoc data and send to ali iot
 def read_send():
-
-    data_pm=bytearray(32)
-    pm.readinto(data_pm)
-
-    instruction_voc(light_on_voc)
-    data_voc = instruction_voc(read_instruct_voc)
-    if data_voc[0] == 255 and data_voc[1] == 135 and data_pm[0]==66 and data_pm[1]==77:
-        data_g = (data_voc[2] * 256 + data_voc[3]) / 1000
-        data_t = (data_voc[8] << 8 | data_voc[9]) / 100
-        data_h = (data_voc[10] << 8 | data_voc[11]) / 100
-        data_pm2_5 = data_pm[6]<<8 | data_pm[7]
-        data_pm10 = data_pm[8] << 8 | data_pm[9]
-        dataframe = {"params": {"concentration": data_g, "temperature": data_t, "humidity": data_h,
-                                "pm2_5":data_pm2_5,"pm10":data_pm10}}
+    instruction(light_on)
+    data_frame = instruction(read_instruct)
+    if data_frame[0] == 255 and data_frame[1] == 135:
+        data_g = (data_frame[2] * 256 + data_frame[3]) / 1000
+        data_t = (data_frame[8] << 8 | data_frame[9]) / 100
+        data_h = (data_frame[10] << 8 | data_frame[11]) / 100
+        dataframe = {"params": {"data_g": data_g, "data_t": data_t, "data_h": data_h}}
 
         tvoc_mqtt = MQTTClient(client_id=mqttClientId, server=server, port=port, user=mqttUsername, password=mqttPassword,keepalive=60)
         tvoc_mqtt.set_callback(callback)
@@ -120,12 +96,14 @@ def read_send():
         tvoc_mqtt.subscribe(topic_s)
         time.sleep(1)
 
+
+
 def main():
-    while(True):
-        net_connecting('TP-LINK_5BF0', 'biubiu2017')
-        instruction_pm(wakeup_pm)
-        instruction_voc(wakeup_voc)
-        read_send()
+    uos.dupterm(None, 1)
+
+    net_connecting('TP-LINK_5BF0','biubiu2017')
+
+    read_send()
 
 
 
